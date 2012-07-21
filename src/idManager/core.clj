@@ -2,37 +2,93 @@
   (:require [noir.server :as server])
   (:require [noir.response :as response])
   (:require [noir.validation :as vali])
-  (:use [noir.core :only [defpage defpartial]])
+  (:require [monger core])
+  (:use [noir.core :only [defpage defpartial render url-for]])
   (:use [hiccup.page :only [html5 include-css include-js]])
   (:use [hiccup.element])
   (:use [hiccup.form])
-  (:use [hiccup.util :only [escape-html]])
+  (:require [hiccup.util :as hiccup])
   (:require [idManager.domain :as domain]))
+
 
 (defn -main [& m]
   (let [mode (or (first m) :dev)
-        port (Integer/parseInt (get (System/getenv) "PORT" "8080"))]
+        port (Integer/parseInt (get (System/getenv) "PORT" "8080"))
+        mongo-uri {:host "localhost" :port 27017 :db "idManager" :auth nil}]
+    (monger.core/connect! mongo-uri)
+    (monger.core/set-db! (monger.core/get-db (:db mongo-uri)))
     (server/start port {:mode (keyword mode)
-                        :ns 'noir})))
+                        :ns 'noir}))
+ )
 
-(defpartial display-id [ {:keys [id website userid password]} ]
-  [:tr 
-   [:td website]
+(defpartial head-page [] 
+  [:head
+     [:style
+      (hiccup/escape-html "body{padding-top:60px}")]
+     [:title "Manage your webapps-id"]
+     (include-css "/css/bootstrap.css")])
+
+    
+(defpartial layout [ & content ]
+  (html5
+    (head-page)
+    [:body
+      [:div.navbar.navbar-fixed-top 
+       [:div.navbar-inner
+        [:div.container
+         (link-to {:class "brand"} "/" "Webapp-id Store")
+         [:div.nav-collapse
+          [:ul.nav
+           [:li.active (link-to "/" "Home")]
+           [:li (link-to "/about" "About")]
+           [:li (link-to "/contact" "Contact")] ] ] ] ] ]
+      content]))
+
+
+(defpartial display-id [{:keys [_id url userid password]}]
+  [:tr
+   [:td (link-to {:target "_newwindow"} (str "http://" url) url)]
    [:td userid]
    [:td password]
-  ])
+   [:td (link-to (url-for edit {:id _id}) "Edit")]
+   [:td (link-to (url-for delete {:id _id}) "Delete")]
+  ]
+)
+  
+
+
+(defpartial common-content [ msg ]
+    [:br][:br]
+    [:div.row
+       [:div.span1 
+        [:h3 "&nbsp" ]
+       ]
+       [:div.span7
+        [:div.hero-unit 
+         [:p msg ]
+        ]
+       ]
+       [:div.span5
+        [:h3 "&nbsp"]
+       ]
+      ]
+)
 
 (defpartial error-text [[first-error]]
-  [:p.error first-error])
-  
-(defpartial left-side-content [{:keys [website userid password]}]
-  (form-to {:class "form-horizontal"} [:post "/add"]
+  [:p.alert-error first-error]
+)
+
+
+(defpartial left-side-content [{:keys [_id url userid password]} post-url form-title] 
+  (form-to {:class "form-horizontal"} [:post post-url]
                  [:fieldset
-                  [:legend "Add Webapp - Id " ]
+                  [:legend form-title ]
+                  (when _id
+                    (hidden-field  "_id" _id )) 
                   [:div.control-group
                   (label {:for "url"} "urllbl" "Website URL")
-                  (text-field {:class "input-xlarge" :size 55 :maxlength 55} "url" website )
-                  (vali/on-error :website error-text)
+                  (text-field {:class "input-xlarge" :size 55 :maxlength 55} "url" url)
+                  (vali/on-error :url error-text)
                   ]
                   [:div.control-group
                   (label {:for "userid"}  "uidlbl" "User Id")
@@ -41,16 +97,16 @@
                   ]
                   [:div.control-group
                   (label {:for "password"}  "pwdlbl" "Password ")
-                  (password-field {:class "input-xlarge" :size 15 :maxlength 15 } "password" password)
+                  (text-field {:class "input-xlarge" :size 15 :maxlength 15 } "password" password)
                   (vali/on-error :password error-text)
                   ]
                   [:div.form-actions
                   (submit-button {:class "btn btn-primary"} " Save ")
-                  (escape-html "    ")
-                  (reset-button {:class "btn btn-primary"} " Cancel ")
                   ]
-                  
-                 ]) )
+                 ])
+)
+
+
 
 (defpartial right-side-content [] 
   [:h3 "List of Webapp Ids"]
@@ -58,44 +114,40 @@
          [:th "Webapp/Site "] [:th "User Id"] [:th "Password "]
          (map display-id (domain/get-all))
         ]
-  )
+)
 
-(defpage "/" [] 
-  (html5 
-    [:head
-     [:style
-      (escape-html "body{padding-top:60px}")]
-     [:title "Manage your webapps-id"]
-     (include-css "bootstrap.css")]
-     
-    [:body
-      [:div.navbar.navbar-fixed-top 
-       [:div.navbar-inner
-        [:div.container
-         (link-to {:class "brand"} "#" "Webapp-id Store")
-         [:div.nav-collapse
-          [:ul.nav
-           [:li.active (link-to "#" "Home")]
-           [:li (link-to "#about" "About")]
-           [:li (link-to "#contact" "Contact")]
-           ]
-          ]
-         ]
-        ]
-       ]
+
+      
+(defpage "/" {:as entry} 
+  (layout 
       [:div.row
        [:div.span1 
         [:h3 "&nbsp" ] 
        ]
        [:div.span7
-        (left-side-content {})
+        (left-side-content entry "/save" "Add Webapp-id")
+       ]
+       [:div.span5
+        (right-side-content)
+       ]
+      ]))
+ 
+
+   (defpage edit  "/edit/:id"  {id :id}
+   (layout
+      [:div.row
+       [:div.span1 
+        [:h3 "&nbsp" ] 
+       ]
+       [:div.span7
+        (left-side-content (domain/find-by-id id)  "/save" "Edit Webapp-id")
        ]
        [:div.span5
         (right-side-content)
        ]
       ]
-    ]))
-     
+      ))
+ 
      
 (defn valid? [{:keys [url userid password]}]
   (vali/rule (vali/has-value? password)
@@ -109,15 +161,29 @@
    (not (vali/errors? :url :password :userid))) 
     
     
-(defpage [:post "/add"] {:keys [url userid password] :as entry}
-  (when (valid? entry)
-    (domain/add-new-id url userid password))
-  (response/redirect "/" entry))
+(defpage [:post "/save"] {:keys [_id url userid password] :as entry}
+  (if (valid? entry)
+  (do 
+    (if _id 
+      (domain/update-id _id url userid password)
+      (domain/add-new-id url userid password))
+    (response/redirect "/" ) )
+    (render "/" entry)))
+    
+(defpage delete "/delete/:id" {:keys [id]}
+    (domain/delete-id id)
+    (response/redirect "/"))
   
 
-  
+(defpage "/about" []
+  (layout
+    (common-content "This webapp helps to store your user id and passwords of the websites you are using")))
 
+
+(defpage "/contact" []
+  (layout 
+    (common-content "E-mail : abe_v  at  indiatimes.com")))
+
+  
 (defn check [] 
   (print "Working "))
-
-
